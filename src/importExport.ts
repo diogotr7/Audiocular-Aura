@@ -11,27 +11,8 @@ import {
 } from "./fn.ts";
 import { syncToDevice } from "./dsp.ts";
 import { log, updateGlobalGain } from "./helpers.ts";
-import type { Band, EQ } from "./main.ts";
-
-interface ProfileData {
-	globalGain: number;
-	bands: EQ;
-}
-
-/**
- * Returns a neutral/flat band at a given index.
- * Used to fill any unspecified slots when importing a profile.
- */
-function neutralBand(index: number): Band {
-	return {
-		index,
-		freq: 1000,
-		gain: 0,
-		q: 0.71,
-		type: "PK",
-		enabled: true,
-	};
-}
+import { parseTextProfile, neutralBand, type ProfileData } from "./profiles.ts";
+import { isUgreen, validateUgreenProfile } from "./ugreen.ts";
 
 /**
  * Export profile to JSON file
@@ -41,7 +22,7 @@ export async function exportProfile() {
 	const eqState = getEqState();
 	
 	const data = {
-		device: "Audiocular Aura",
+		device: getDevice()?.productName || "Audiocular Aura",
 		timestamp: new Date().toISOString(),
 		globalGain: globalGainState,
 		bands: eqState,
@@ -70,6 +51,7 @@ export async function exportProfileAsText() {
 		PK: "PK",
 		LSQ: "LSQ",
 		HSQ: "HSQ",
+		LP: "LP", HP: "HP",
 	};
 
 	const lines: string[] = [];
@@ -107,66 +89,6 @@ function parseJsonProfile(content: string): ProfileData {
 }
 
 /**
- * Parse Text profile data (AutoEq format: Preamp: ... Filter X: ...)
- */
-function parseTextProfile(content: string): ProfileData {
-	const lines = content.split(/\r?\n/);
-	const currentBandsCount = getEqState().length;
-	// Start from a clean neutral baseline — never inherit current active EQ values
-	const bands: EQ = Array.from({ length: currentBandsCount }, (_, i) => neutralBand(i)) as EQ;
-	let globalGain = 0;
-
-	// Regex for Preamp: "Preamp: -8.0 dB"
-	const preampRegex = /^Preamp:\s*(-?\d+(\.\d+)?)\s*(?:dB)?/i;
-
-	// Regex for Filter: "Filter 1: ON PK Fc 34 Hz Gain -2.6 dB Q 0.80"
-	const filterRegex =
-		/^Filter\s+(\d+):\s+(ON|OFF)\s+([A-Z]+)\s+Fc\s+(\d+(?:\.\d+)?)\s*(?:Hz)?\s+Gain\s+(-?\d+(?:\.\d+)?)\s*(?:dB)?\s+Q\s+(\d+(?:\.\d+)?)/i;
-
-	for (const line of lines) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-
-		const preampMatch = trimmed.match(preampRegex);
-		if (preampMatch) {
-			globalGain = parseFloat(preampMatch[1]);
-			continue;
-		}
-
-		const filterMatch = trimmed.match(filterRegex);
-		if (filterMatch) {
-			const index = parseInt(filterMatch[1], 10) - 1; // 1-based to 0-based
-			if (index >= 0 && index < bands.length) {
-				const enabled = filterMatch[2].toUpperCase() === "ON";
-				const type = filterMatch[3].toUpperCase(); // e.g. PK, LSQ, HSQ
-				const freq = parseFloat(filterMatch[4]);
-				const gain = parseFloat(filterMatch[5]);
-				const q = parseFloat(filterMatch[6]);
-
-				// Normalize type names
-				let finalType = "PK";
-				if (type === "LS" || type === "LSC" || type === "LSQ") {
-					finalType = "LSQ";
-				} else if (type === "HS" || type === "HSC" || type === "HSQ") {
-					finalType = "HSQ";
-				}
-
-				bands[index] = {
-					...bands[index],
-					freq,
-					gain,
-					q,
-					type: finalType,
-					enabled,
-				};
-			}
-		}
-	}
-
-	return { globalGain, bands };
-}
-
-/**
  * Import profile from file
  * @param e Event object
  */
@@ -189,7 +111,7 @@ export async function importProfile(e: Event) {
 				result.trim().startsWith("Preamp:") ||
 				result.includes("Filter 1:")
 			) {
-				profile = parseTextProfile(result);
+				profile = parseTextProfile(result, getEqState().length, !!getDevice() && isUgreen(getDevice()!));
 			} else {
 				throw new Error("Unknown file format. Must be JSON or AutoEq txt file.");
 			}
@@ -198,6 +120,7 @@ export async function importProfile(e: Event) {
 			let importedBands = profile.bands;
 			const currentBandsCount = getEqState().length;
 			if (importedBands.length > currentBandsCount) {
+				if (getDevice() && isUgreen(getDevice()!)) throw new Error("UGREEN supports at most 15 filters; this profile was not applied.");
 				log(`Note: Imported profile has ${importedBands.length} bands but current device only supports ${currentBandsCount} bands. Keeping the first ${currentBandsCount} bands.`);
 				importedBands = importedBands.slice(0, currentBandsCount);
 			} else if (importedBands.length < currentBandsCount) {
@@ -213,6 +136,7 @@ export async function importProfile(e: Event) {
 			importedBands.forEach((band, idx) => {
 				band.index = idx;
 			});
+			if (getDevice() && isUgreen(getDevice()!)) validateUgreenProfile(importedBands, profile.globalGain);
 
 			// Re-create DOM elements for strips to ensure correct bands count
 			const stripsContainer = document.getElementById("eqStrips");
@@ -224,7 +148,7 @@ export async function importProfile(e: Event) {
 			setGlobalGainState(profile.globalGain);
 
 			// Update UI and send preamp packet
-			updateGlobalGain(profile.globalGain);
+			await updateGlobalGain(profile.globalGain, !!getDevice() && isUgreen(getDevice()!));
 			renderUI(importedBands);
 
 			const name = `Imported: ${file.name.replace(/\.[^/.]+$/, "")}`;
@@ -260,7 +184,8 @@ export async function importProfile(e: Event) {
  */
 export async function loadProfileFromText(content: string, presetName?: string) {
 	try {
-		const profile = parseTextProfile(content);
+		const profile = parseTextProfile(content, getEqState().length, !!getDevice() && isUgreen(getDevice()!));
+		if (getDevice() && isUgreen(getDevice()!)) validateUgreenProfile(profile.bands, profile.globalGain);
 
 		// Update internal state and handle variable band count
 		let importedBands = profile.bands;
@@ -294,10 +219,10 @@ export async function loadProfileFromText(content: string, presetName?: string) 
 		const autoPreamp = (window as any).getAutoPreampEnabled?.();
 		if (autoPreamp) {
 			(window as any).setManualPreampState?.(profile.globalGain);
-			await (window as any).recalculateAutoPreamp?.();
+			await (window as any).recalculateAutoPreamp?.(!!getDevice() && isUgreen(getDevice()!));
 		} else {
 			setGlobalGainState(profile.globalGain);
-			await updateGlobalGain(profile.globalGain);
+			await updateGlobalGain(profile.globalGain, !!getDevice() && isUgreen(getDevice()!));
 		}
 		renderUI(importedBands);
 

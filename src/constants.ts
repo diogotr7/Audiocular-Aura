@@ -75,11 +75,19 @@ export interface IdentifiedDac {
 	pid?: number;
 	name: string;
 	chipset?: string;
-	protocol: "SAVITECH" | "MOONDROP" | "FIIO" | "FIIO_JA11" | "CONEXANT";
+	protocol: "SAVITECH" | "MOONDROP" | "FIIO" | "FIIO_JA11" | "CONEXANT" | "UGREEN_KT0210";
 	description?: string;
 }
 
 export const KNOWN_DACS: IdentifiedDac[] = [
+	{
+		vid: 0x12d1,
+		pid: 0x0010,
+		name: "UGREEN USB-C Audio (KT0210)",
+		chipset: "KTMicro KT0210 / Selene",
+		protocol: "UGREEN_KT0210",
+		description: "15-band playback EQ with persistent save; firmware 1.0.1_210719_B1.",
+	},
 	{
 		vid: VID_AUDIOCULAR,
 		pid: PID_TRN_BLACK_PEARL,

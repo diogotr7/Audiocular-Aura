@@ -128,7 +128,7 @@ async function safeSyncToDevice() {
 	if ((window as any).isConfigurationUnsafe?.()) {
 		showSafetyModal("sync");
 	} else {
-		await syncToDevice();
+		await syncToDevice(true);
 	}
 }
 
@@ -221,7 +221,7 @@ btnSafetyProceed?.addEventListener("click", async () => {
 	const action = safetyActionPending;
 	closeSafetyModal();
 	if (action === "sync") {
-		await syncToDevice();
+		await syncToDevice(true);
 	} else if (action === "flash") {
 		await flashToFlash();
 	}
@@ -1275,7 +1275,7 @@ window.addEventListener("keydown", (e: KeyboardEvent) => {
 			if (e.shiftKey) {
 				flashToFlash();
 			} else {
-				syncToDevice();
+				syncToDevice(true);
 			}
 		} else if (key === "[") {
 			e.preventDefault();

@@ -1,5 +1,13 @@
 [
   {
+    "vid": 4817,
+    "pid": 16,
+    "name": "UGREEN USB-C Audio (KT0210)",
+    "chipset": "KTMicro KT0210 / Selene",
+    "protocol": "UGREEN_KT0210",
+    "description": "15-band playback EQ with persistent save; firmware 1.0.1_210719_B1."
+  },
+  {
     "vid": 13058,
     "pid": 17384,
     "name": "TRN Black Pearl",

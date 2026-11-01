@@ -9,7 +9,8 @@ import {
 	VID_AUDIOCULAR,
 	activeDacs,
 } from "./constants.ts";
-import { readDeviceParams, setupListener, syncToDevice, queueRealtimeBandWrite, getProtocol, getActiveProtocol } from "./dsp.ts";
+import { readDeviceParams, setupListener, syncToDevice, queueRealtimeBandWrite, getProtocol, getActiveProtocol, releaseUgreenDriver } from "./dsp.ts";
+import { isUgreen, UGREEN_FREQUENCIES, isUgreenPass, ugreenMaxQ } from "./ugreen.ts";
 import { enableControls, log, updateGlobalGainUI, refreshStripUI, updateGlobalGain, configurePreampUI, createRatingElement, createNotesElement } from "./helpers.ts";
 import type { Band, EQ } from "./main.ts";
 import { renderPEQ, resizeCanvas } from "./peq.ts";
@@ -522,7 +523,7 @@ export function setFocusedBand(index: number) {
 
 export function resetBand(index: number) {
 	if (index < 0 || index >= eqState.length) return;
-	eqState[index].freq = DEFAULT_FREQS[index] || 1000;
+	eqState[index].freq = (device && isUgreen(device) ? UGREEN_FREQUENCIES : DEFAULT_FREQS)[index] || 1000;
 	eqState[index].gain = 0;
 	eqState[index].q = 0.75;
 	eqState[index].type = "PK";
@@ -589,7 +590,8 @@ export function setGlobalGainState(gainState: number) {
  * Generate default flat 10-band EQ state
  */
 export function defaultEqState(): EQ {
-	return DEFAULT_FREQS.map((freq, i) => ({
+	const frequencies = device && isUgreen(device) ? UGREEN_FREQUENCIES : DEFAULT_FREQS;
+	return frequencies.map((freq, i) => ({
 		index: i,
 		freq: freq,
 		gain: 0,
@@ -643,7 +645,7 @@ export function renderUI(eqState: EQ) {
 				div.innerHTML = `
 					<div class="strip-header">
 						<h3 class="strip-title">${t("band") || "BAND"} ${i + 1}</h3>
-						<span class="strip-label">${DEFAULT_LABELS[i]}</span>
+						<span class="strip-label">${DEFAULT_LABELS[i] || "Playback EQ"}</span>
 					</div>
 					
 					<label class="switch">
@@ -669,7 +671,7 @@ export function renderUI(eqState: EQ) {
 
 					<div class="strip-field">
 						<label class="strip-field-label">${t("band_q") || "Q Factor"}</label>
-						<input type="number" value="${band.q}" min="0.1" max="10" step="0.05"
+						<input type="number" value="${band.q}" min="${device && isUgreen(device) ? ".2" : ".1"}" max="10" step="0.05"
 							onchange="window.updateState(${i}, 'q', this.value); window.pushHistory()" id="num-q-${i}" ${device ? "" : "disabled"} class="strip-input font-mono" size="6">
 					</div>
 
@@ -679,7 +681,7 @@ export function renderUI(eqState: EQ) {
 							<option value="PK" ${band.type === "PK" ? "selected" : ""}>${t("band_type_peak") || "Peak"}</option>
 							<option value="LSQ" ${band.type === "LSQ" ? "selected" : ""}>${t("band_type_low") || "Low Shelf"}</option>
 							<option value="HSQ" ${band.type === "HSQ" ? "selected" : ""}>${t("band_type_high") || "High Shelf"}</option>
-							<option value="NOTCH" ${band.type === "NOTCH" ? "selected" : ""}>${t("band_type_notch") || "Notch"}</option>
+							${device && isUgreen(device) ? `<option value="LP" ${band.type === "LP" ? "selected" : ""}>Low-pass</option><option value="HP" ${band.type === "HP" ? "selected" : ""}>High-pass</option>` : `<option value="NOTCH" ${band.type === "NOTCH" ? "selected" : ""}>${t("band_type_notch") || "Notch"}</option>`}
 						</select>
 					</div>
 				`;
@@ -694,6 +696,7 @@ export function renderUI(eqState: EQ) {
 				refreshStripUI(eqState, i);
 			});
 		}
+		if (device && isUgreen(device)) eqState.forEach((_, i) => refreshStripUI(eqState, i));
 	}
 }
 
@@ -717,7 +720,7 @@ export async function connectToDevice() {
 			vendorIds.add(dac.vid);
 		});
 
-		const filters: any[] = Array.from(vendorIds).map(vid => ({ vendorId: vid }));
+		const filters: any[] = Array.from(vendorIds).map(vid => vid === 0x12d1 ? { vendorId: vid, productId: 0x0010 } : { vendorId: vid });
 
 		// Check for custom VID/PID overrides in the UI
 		const customVidEl = document.getElementById("customVid") as HTMLInputElement;
@@ -832,7 +835,7 @@ export async function connectToDevice() {
 
 		// Support parameter reading for Savitech-based DACs (including FiiO JA11 and Moondrop)
 		const protocol = getProtocol(device);
-		if (protocol === "SAVITECH" || protocol === "FIIO_JA11" || protocol === "MOONDROP") {
+		if (protocol === "SAVITECH" || protocol === "FIIO_JA11" || protocol === "MOONDROP" || protocol === "UGREEN_KT0210") {
 			await readDeviceParams(device);
 		} else {
 			log("Note: Parameter reading is only supported for Savitech, FiiO JA11, and Moondrop devices. Starting with a flat profile.");
@@ -846,11 +849,12 @@ export async function connectToDevice() {
 			setLastAppliedEqName(savedName);
 		}
 
-		if (autoPreampEnabled) {
+		if (autoPreampEnabled && protocol !== "UGREEN_KT0210") {
 			await recalculateAutoPreamp(true);
 		}
 	} catch (err) {
 		log(`Connection Error: ${(err as Error).message}`);
+		if (device && isUgreen(device)) await disconnectDevice();
 	}
 }
 
@@ -860,6 +864,7 @@ export async function connectToDevice() {
 export async function disconnectDevice() {
 	if (!device) return;
 	const protocol = getProtocol(device);
+	if (isUgreen(device)) releaseUgreenDriver(device);
 	try {
 		log(`Disconnecting from: ${device.productName || "DAC"}`);
 		await device.close();
@@ -1004,8 +1009,14 @@ export async function updateState(
 	if (key === "freq") {
 		value = Math.max(20, Math.min(20000, value as number));
 	}
+	if (device && isUgreen(device) && key === "q") value = Math.max(.2, Math.min(ugreenMaxQ(eqState[index].type), value as number));
+	if (device && isUgreen(device) && key === "gain" && isUgreenPass(eqState[index].type)) value = 0;
 
 	setEQ(index, key as keyof Band, value);
+	if (device && isUgreen(device) && key === "type") {
+		if (isUgreenPass(String(value))) setEQ(index, "gain", 0);
+		setEQ(index, "q", Math.min(eqState[index].q, ugreenMaxQ(String(value))));
+	}
 
 	if (key === "type" && value === "NOTCH") {
 		setEQ(index, "q", 4.0);
@@ -1058,12 +1069,13 @@ export async function autoConnectDevice() {
 		// Prioritize device with vendor-defined collection (usage page 0xFF00-0xFFFF)
 		let dev = devices.find(d =>
 			allowedVids.has(d.vendorId) &&
+			(d.vendorId !== 0x12d1 || isUgreen(d)) &&
 			d.collections && d.collections.some(c => c.usagePage !== undefined && c.usagePage >= 0xff00 && c.usagePage <= 0xffff)
 		);
 
 		// Fallback to finding by VID only
 		if (!dev) {
-			dev = devices.find(d => allowedVids.has(d.vendorId));
+			dev = devices.find(d => allowedVids.has(d.vendorId) && (d.vendorId !== 0x12d1 || isUgreen(d)));
 		}
 
 		if (!dev) return;
@@ -1103,7 +1115,7 @@ export async function autoConnectDevice() {
 		setupListener(dev);
 
 		const protocol = getProtocol(dev);
-		if (protocol === "SAVITECH" || protocol === "FIIO_JA11" || protocol === "MOONDROP") {
+		if (protocol === "SAVITECH" || protocol === "FIIO_JA11" || protocol === "MOONDROP" || protocol === "UGREEN_KT0210") {
 			await readDeviceParams(dev);
 		} else {
 			renderUI(eqState);
@@ -1116,11 +1128,12 @@ export async function autoConnectDevice() {
 			setLastAppliedEqName(savedName);
 		}
 
-		if (autoPreampEnabled) {
+		if (autoPreampEnabled && protocol !== "UGREEN_KT0210") {
 			await recalculateAutoPreamp(true);
 		}
 	} catch (err) {
 		log(`[System] Auto-connect failed: ${(err as Error).message}`);
+		if (device && isUgreen(device)) await disconnectDevice();
 	}
 }
 
@@ -1129,6 +1142,20 @@ export async function autoConnectDevice() {
  */
 export function adjustBandsForDevice(dev: HIDDevice | null) {
 	const stripsContainer = document.getElementById("eqStrips");
+	const utilityCard = document.getElementById("deviceUtilityCard");
+	const tiltControls = document.getElementById("tiltControls");
+	if (utilityCard) utilityCard.hidden = !!dev && isUgreen(dev);
+	if (tiltControls) tiltControls.hidden = !!dev && isUgreen(dev);
+	const subtitle = document.getElementById("bandsSubtitle");
+	if (subtitle) {
+		if (dev && isUgreen(dev)) {
+			subtitle.removeAttribute("data-i18n");
+			subtitle.textContent = "15 playback filters: peak, shelves and experimental low/high-pass. Shelf/pass Q ≤ 5; changes stay in RAM until saved.";
+		} else {
+			subtitle.setAttribute("data-i18n", "bands_subtitle");
+			subtitle.textContent = t("bands_subtitle");
+		}
+	}
 	if (!dev) {
 		if (stripsContainer) {
 			stripsContainer.innerHTML = "";
@@ -1140,7 +1167,18 @@ export function adjustBandsForDevice(dev: HIDDevice | null) {
 	}
 
 	const protocol = getProtocol(dev);
-	if (protocol === "FIIO_JA11") {
+	if (protocol === "UGREEN_KT0210") {
+		resetTiltState();
+		initSlots();
+		initHistory();
+		if (eqState.length !== 15) eqState = defaultEqState();
+		if (stripsContainer) {
+			stripsContainer.innerHTML = "";
+			stripsContainer.style.setProperty("--bands-count", "5");
+			stripsContainer.style.setProperty("--bands-count-tablet", "3");
+			stripsContainer.style.setProperty("--bands-count-mobile", "2");
+		}
+	} else if (protocol === "FIIO_JA11") {
 		if (eqState.length !== 5) {
 			eqState = [
 				{ index: 0, freq: 100, gain: 0, q: 0.7, type: "PK", enabled: true },
@@ -1480,6 +1518,14 @@ export function getMagnitudeAtFreq(freq: number): number {
 		let b0 = 1, b1 = 0, b2 = 0, a0 = 1, a1 = 0, a2 = 0;
 
 		switch (band.type) {
+			case "LP":
+				b0 = (1 - cosw) / 2; b1 = 1 - cosw; b2 = b0;
+				a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+				break;
+			case "HP":
+				b0 = (1 + cosw) / 2; b1 = -(1 + cosw); b2 = b0;
+				a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+				break;
 			case "NOTCH":
 				b0 = 1;
 				b1 = -2 * cosw;

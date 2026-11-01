@@ -59,6 +59,13 @@ AuraPEQ features a multi-protocol hardware communication layer that automaticall
 | **Conexant (Freeman)** | 0.1 dB steps | Moondrop FreeDSP (9-band configuration) |
 | **FiiO** | 0.1 dB steps | FiiO BTR17, KA17, KA15, KB1, etc. |
 | **FiiO JA11 (KT02H20)** | 0.1 dB steps | FiiO JadeAudio JA11 (5-band configuration) |
+| **UGREEN KT0210 / Selene** | Native attenuation, 0.1 dB UI steps | UGREEN `12d1:0010`, firmware `1.0.1_210719_B1` (15 playback bands) |
+
+UGREEN support includes AutoEQ profiles, 15 playback filters, hardware readback,
+RAM editing and persistent save with reconnect verification. Experimental firmware-mapped
+controls add five mic filters, mic gain, balance, main DSP bypass, gate/compression,
+output limiter, silence detection and low/high-pass filters. Unresolved DAC filter
+and analog gain-mode controls remain hidden. See [UGREEN setup, protocol and hardware validation](docs/ugreen-kt0210.md).
 
 > [!NOTE]
 > **Moondrop / Conexant Protocol Notes:** Since Moondrop and Conexant devices rely on host-side coefficient calculations, A/B comparison level-matching is bypassed automatically to prevent gain packet corruption. A/B comparison switches active slots normally.

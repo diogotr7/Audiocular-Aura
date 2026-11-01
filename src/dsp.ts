@@ -23,11 +23,46 @@ import {
 	getAutoPreampEnabled,
 	getManualPreampState,
 	getLastAppliedEqName,
+	initHistory,
+	initSlots,
+	setManualPreampState,
 	updateBaselineFromActive,
 } from "./fn.ts";
 import { delay, log, refreshStripUI, logTx, logRx, showSyncing, hideSyncing } from "./helpers.ts";
 import type { Band } from "./main.ts";
 import { t } from "./i18n.ts";
+import { isUgreen, UgreenDriver, UGREEN_FIRMWARE } from "./ugreen.ts";
+import { bindUgreenControls, getUgreenControlsDraft, setUgreenControlsBusy, commitUgreenControls } from "./ugreenPanel.ts";
+
+const ugreenDrivers = new WeakMap<HIDDevice, UgreenDriver>();
+let pendingUgreenSave: number[] | null = null;
+function ugreenDriver(device: HIDDevice): UgreenDriver {
+	let driver = ugreenDrivers.get(device);
+	if (!driver) {
+		driver = new UgreenDriver(device, (direction, data) => {
+			// Full backups require hundreds of reads; keep the UI console responsive.
+			if (data[4] === 0x31 || data[4] === 0x32) {
+				direction === "tx" ? logTx(0x4b, data) : logRx(0x4b, data);
+			}
+		});
+		ugreenDrivers.set(device, driver);
+	}
+	return driver;
+}
+export function releaseUgreenDriver(device: HIDDevice): void {
+	if (isUgreen(device)) bindUgreenControls(null);
+	ugreenDrivers.get(device)?.dispose();
+	ugreenDrivers.delete(device);
+	if (writeTimeoutId !== null) clearTimeout(writeTimeoutId);
+	writeTimeoutId = null;
+	pendingBands.clear();
+}
+function ugreenProfile(): Band[] {
+	if (getTiltGainAtFreq(20) !== 0 || getTiltGainAtFreq(20000) !== 0) {
+		throw new Error("UGREEN uses explicit shelf filters; reset the global bass/treble tilt before applying.");
+	}
+	return getEqState().map(band => ({ ...band }));
+}
 
 /**
  * Get the correct HID Report ID for a Moondrop device.
@@ -89,6 +124,8 @@ const REV_TYPE_MAP_JA11: Record<number, string> = { 0: "PK", 1: "LSQ", 2: "HSQ" 
  * DETECT PROTOCOL BASED ON VENDOR ID AND DATABASE
  */
 export function getProtocol(device: HIDDevice) {
+	// This older firmware cannot use the generic KTMicro or custom USB override.
+	if (isUgreen(device)) return "UGREEN_KT0210";
 	// 1. Check merged active database
 	const match = activeDacs.find(
 		(d) =>
@@ -206,6 +243,10 @@ export async function setDeviceGlobalGain(gain: number, skipBandSync = false) {
 	if (!device) return;
 
 	const protocol = getProtocol(device);
+	if (protocol === "UGREEN_KT0210") {
+		if (!skipBandSync) await ugreenDriver(device).applyLatest(ugreenProfile(), gain);
+		return;
+	}
 
 	// Moondrop/Conexant uses host-side coefficient calculation; A/B level-matching would corrupt the gain value.
 	let appliedGain = gain;
@@ -383,7 +424,28 @@ export async function readDeviceParams(device: HIDDevice) {
 	showSyncing();
 	try {
 		const protocol = getProtocol(device);
-		if (protocol === "FIIO_JA11") {
+		if (protocol === "UGREEN_KT0210") {
+			const driver = ugreenDriver(device);
+			const profile = await driver.initialize();
+			setEqState(profile.bands);
+			setGlobalGain(profile.gain);
+			setManualPreampState(profile.gain);
+			renderUI(profile.bands);
+			initSlots();
+			initHistory();
+			for (const id of ["fwVersion", "infoFirmware"]) {
+				const element = document.getElementById(id);
+				if (element) element.innerText = UGREEN_FIRMWARE;
+			}
+			if (pendingUgreenSave) {
+				await driver.verifySaved(pendingUgreenSave);
+				pendingUgreenSave = null;
+				log("UGREEN save verified after reconnect: running EQ and saved flash match.");
+			}
+			log("UGREEN configuration loaded from hardware; connecting does not apply or save EQ.");
+			bindUgreenControls(driver, profile.controls, profile.config, flashToFlash);
+			return;
+		} else if (protocol === "FIIO_JA11") {
 			log("Reading FiiO JA11 configuration...");
 			// Request global gain
 			const gainPacket = new Uint8Array([0xbb, 0x0b, 0, 0, 23, 0, 0, 0xee]);
@@ -553,6 +615,7 @@ function updateBalanceState(channel: number, attenuation: number) {
  * @param device The WebHID device
  */
 export function setupListener(device: HIDDevice) {
+	if (isUgreen(device)) return; // Dedicated listener matches report, full address and opcode.
 	const eqState = getEqState();
 	device.addEventListener("inputreport", (event) => {
 		const versionEl = document.getElementById("fwVersion");
@@ -753,7 +816,7 @@ export function setupListener(device: HIDDevice) {
 /**
  * Sync all bands and preamp gain to device RAM
  */
-export async function syncToDevice() {
+export async function syncToDevice(includeUgreenControls = false) {
 	const device = getDevice();
 	const eqState = getEqState();
 	if (!device || !eqState) return;
@@ -763,6 +826,21 @@ export async function syncToDevice() {
 		const protocol = getProtocol(device);
 		console.debug(`[DEBUG] syncToDevice: Starting sync with protocol=${protocol}`);
 		log(`Syncing via protocol: ${protocol}...`);
+		if (protocol === "UGREEN_KT0210") {
+			if (includeUgreenControls) {
+				const controls = getUgreenControlsDraft();
+				setUgreenControlsBusy(true);
+				try {
+					await ugreenDriver(device).applyAll(ugreenProfile(), getGlobalGainState(), controls);
+					commitUgreenControls(controls);
+				} finally { setUgreenControlsBusy(false); }
+				log("UGREEN playback EQ and controls readback verified in RAM; flash unchanged.");
+			} else {
+				await ugreenDriver(device).apply(ugreenProfile(), getGlobalGainState());
+				log("UGREEN playback EQ verified in RAM; device controls preserved.");
+			}
+			return;
+		}
 
 		// Moondrop: use dedicated sync path
 		if (protocol === "MOONDROP") {
@@ -849,7 +927,15 @@ export async function flashToFlash() {
 	try {
 		const protocol = getProtocol(device);
 
-		if (protocol === "FIIO") {
+		if (protocol === "UGREEN_KT0210") {
+			// Save the displayed profile, not whatever happened to be left in RAM.
+			const controls = getUgreenControlsDraft();
+			setUgreenControlsBusy(true);
+			try { pendingUgreenSave = await ugreenDriver(device).applyAndSave(ugreenProfile(), getGlobalGainState(), controls); }
+			catch (error) { setUgreenControlsBusy(false); throw error; }
+			log("UGREEN save acknowledged. Adapter will reconnect; verification follows automatically.");
+			return;
+		} else if (protocol === "FIIO") {
 			const packet = new Uint8Array(64);
 			packet.set([
 				CMD_FIIO.HEADER_SET_1,
@@ -925,6 +1011,10 @@ export async function writeBand(
 	band: Band,
 	protocol: string,
 ) {
+	if (protocol === "UGREEN_KT0210") {
+		await ugreenDriver(device).apply(ugreenProfile(), getGlobalGainState());
+		return;
+	}
 	let val = (band.enabled ? band.gain : 0) + getTiltGainAtFreq(band.freq);
 	const effectiveGain = Math.max(-12, Math.min(12, val));
 
@@ -1337,6 +1427,7 @@ async function setGlobalGainFiio(device: HIDDevice, gain: number) {
  * Send packet over WebHID using Savitech layout
  */
 async function sendPacketSavitech(device: HIDDevice, bytes: number[]) {
+	if (isUgreen(device)) throw new Error("Generic Savitech commands must not be sent to UGREEN.");
 	// If it's a read command (starts with 128 / 0x80) or version ack (starts with 12) or
 	// PEQ write command (starts with 1, 9), pad to exactly 36 bytes.
 	// Otherwise, send the exact array length.
@@ -1539,6 +1630,7 @@ function encodeToByteArray(coeffs: number[]) {
  * Advanced settings commands (Savitech CB5100 DSP)
  */
 export async function setDacFilter(device: HIDDevice, filterType: string) {
+	if (isUgreen(device)) throw new Error("DAC filter controls are not supported for UGREEN.");
 	let r = 1;
 	switch (filterType) {
 		case "FAST-LL": r = 1; break;
@@ -1554,6 +1646,7 @@ export async function setDacFilter(device: HIDDevice, filterType: string) {
 }
 
 export async function setDacWorkMode(device: HIDDevice, isClassAB: boolean) {
+	if (isUgreen(device)) throw new Error("Amplifier mode controls are not supported for UGREEN.");
 	const r = isClassAB ? 1 : 0;
 	log(`Setting Amp Mode: ${isClassAB ? "Class AB" : "Class H"}`);
 	await sendPacketSavitech(device, [1, 29, 1, r]);
@@ -1561,6 +1654,7 @@ export async function setDacWorkMode(device: HIDDevice, isClassAB: boolean) {
 }
 
 export async function setDacOutputGain(device: HIDDevice, isHighGain: boolean) {
+	if (isUgreen(device)) throw new Error("Output gain mode controls are not supported for UGREEN.");
 	const r = isHighGain ? 1 : 0;
 	log(`Setting DAC Output Gain Mode: ${isHighGain ? "HIGH" : "LOW"}`);
 	await sendPacketSavitech(device, [1, 25, 1, r]);
@@ -1568,6 +1662,7 @@ export async function setDacOutputGain(device: HIDDevice, isHighGain: boolean) {
 }
 
 export async function setDacBalance(device: HIDDevice, balance: number) {
+	if (isUgreen(device)) throw new Error("Balance controls are not supported for UGREEN.");
 	log(`Setting DAC Balance: ${balance}`);
 	const he = balance <= 0 ? Math.abs(balance) : 0;
 	const ne = balance > 0 ? balance : 0;
@@ -1591,6 +1686,7 @@ export async function setDacBalance(device: HIDDevice, balance: number) {
 }
 
 export async function setMicVolume(device: HIDDevice, volume: number) {
+	if (isUgreen(device)) throw new Error("Microphone gain controls are not supported for UGREEN.");
 	log(`Setting Microphone Gain: ${volume} dB`);
 	await sendPacketSavitech(device, [1, 2, 2, 128, volume]);
 	await delay(50);
@@ -1600,6 +1696,7 @@ export async function setMicVolume(device: HIDDevice, volume: number) {
 let refreshTimeoutId: any = null;
 
 export async function refreshToFlash(device: HIDDevice) {
+	if (isUgreen(device)) throw new Error("UGREEN saves require its verified configuration-save command.");
 	if (refreshTimeoutId) {
 		clearTimeout(refreshTimeoutId);
 	}
@@ -1631,11 +1728,16 @@ export function queueRealtimeBandWrite(device: HIDDevice, band: Band) {
 		const bandsToClear = Array.from(pendingBands.values());
 		pendingBands.clear();
 
-		if (!device) return;
+		if (!device || getDevice() !== device) return;
 		showSyncing();
 		try {
 			const protocol = getProtocol(device);
 
+			// UGREEN validates and applies the full displayed profile, including preamp.
+			if (protocol === "UGREEN_KT0210") {
+				await ugreenDriver(device).applyLatest(ugreenProfile(), getGlobalGainState());
+				return;
+			}
 			// Write all pending bands
 			for (const b of bandsToClear) {
 				await writeBand(device, b, protocol);
@@ -1666,6 +1768,8 @@ export function queueRealtimeBandWrite(device: HIDDevice, band: Band) {
 					log(`Conexant Realtime Commit Error: ${(e as Error).message}`);
 				}
 			}
+		} catch (error) {
+			log(`Realtime EQ was not applied: ${(error as Error).message}`);
 		} finally {
 			hideSyncing();
 		}
@@ -1673,6 +1777,7 @@ export function queueRealtimeBandWrite(device: HIDDevice, band: Band) {
 }
 
 export async function executeFactoryReset(device: HIDDevice) {
+	if (isUgreen(device)) throw new Error("Use Reset to Flat for UGREEN; generic hardware reset is unsupported.");
 	log("Executing Factory Reset...");
 	showSyncing();
 	try {

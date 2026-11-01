@@ -66,7 +66,7 @@ function yToGain(y: number, height: number) {
 /**
  * Calculate Biquad Filter Coefficients (RBJ Audio EQ Cookbook)
  */
-function calculateBiquad(band: Band, sampleRate: number = 48000) {
+export function calculateBiquad(band: Band, sampleRate: number = 48000) {
 	if (!band.enabled) {
 		return { b0: 1, b1: 0, b2: 0, a1: 0, a2: 0 };
 	}
@@ -79,6 +79,14 @@ function calculateBiquad(band: Band, sampleRate: number = 48000) {
 	let b0, b1, b2, a0, a1, a2;
 
 	switch (band.type) {
+		case "LP":
+			b0 = (1 - cosw) / 2; b1 = 1 - cosw; b2 = b0;
+			a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+			break;
+		case "HP":
+			b0 = (1 + cosw) / 2; b1 = -(1 + cosw); b2 = b0;
+			a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha;
+			break;
 		case "NOTCH":
 			b0 = 1;
 			b1 = -2 * cosw;
@@ -135,7 +143,7 @@ function calculateBiquad(band: Band, sampleRate: number = 48000) {
 /**
  * Compute Magnitude response at a given frequency
  */
-function getMagnitude(
+export function getMagnitude(
 	freq: number,
 	coeffsList: any[],
 	sampleRate: number = 48000,

@@ -1,5 +1,6 @@
 import { setDeviceGlobalGain, getActiveProtocol } from "./dsp.ts";
 import type { EQ } from "./main.ts";
+import { isUgreenPass, ugreenMaxQ } from "./ugreen.ts";
 
 /**
  * Refresh the UI elements for a single EQ strip
@@ -22,6 +23,12 @@ export function refreshStripUI(eqState: EQ, i: number) {
 	if (qInput) qInput.value = band.q.toString();
 	if (typeSelect) typeSelect.value = band.type;
 	if (checkInput) checkInput.checked = band.enabled;
+	if (getActiveProtocol() === "UGREEN_KT0210") {
+		if (qInput) { qInput.max = String(ugreenMaxQ(band.type)); qInput.step = ".001"; }
+		if (freqInput) freqInput.step = ".1";
+		if (gainInput) gainInput.disabled = isUgreenPass(band.type);
+		if (rangeInput) rangeInput.disabled = isUgreenPass(band.type);
+	}
 
 	// Toggle visual bypassed class state
 	const strip = document.querySelector(`.eq-strip:nth-child(${i + 1})`);
@@ -52,7 +59,7 @@ export function updateGlobalGainUI(val: number) {
 		if (protocol === "SAVITECH") {
 			globalGainSlider.step = "1";
 			globalGainSlider.value = Math.round(val).toString();
-		} else if (protocol === "MOONDROP" || protocol === "FIIO_JA11" || protocol === "FIIO") {
+		} else if (protocol === "MOONDROP" || protocol === "FIIO_JA11" || protocol === "FIIO" || protocol === "UGREEN_KT0210") {
 			globalGainSlider.step = "0.1";
 			globalGainSlider.value = val.toString();
 		} else {
@@ -127,6 +134,7 @@ export function configurePreampUI(currentGain: number) {
 	const protocol = getActiveProtocol();
 	const globalGainSlider = document.getElementById("globalGainSlider") as HTMLInputElement;
 	const preampStepIndicator = document.getElementById("preampStepIndicator") as HTMLElement;
+	if (globalGainSlider) globalGainSlider.max = protocol === "UGREEN_KT0210" ? "0" : "10";
 
 	if (protocol === "SAVITECH") {
 		if (globalGainSlider) globalGainSlider.step = "1";
@@ -134,10 +142,10 @@ export function configurePreampUI(currentGain: number) {
 			preampStepIndicator.innerText = "Integer steps only (Savitech hardware constraint)";
 			preampStepIndicator.className = "preamp-step-indicator warning";
 		}
-	} else if (protocol === "MOONDROP" || protocol === "FIIO_JA11" || protocol === "FIIO") {
+	} else if (protocol === "MOONDROP" || protocol === "FIIO_JA11" || protocol === "FIIO" || protocol === "UGREEN_KT0210") {
 		if (globalGainSlider) globalGainSlider.step = "0.1";
 		if (preampStepIndicator) {
-			preampStepIndicator.innerText = "Fine steps (0.1 dB precision supported)";
+			preampStepIndicator.innerText = protocol === "UGREEN_KT0210" ? "Playback attenuation: −20 to 0 dB; preserves factory channel calibration" : "Fine steps (0.1 dB precision supported)";
 			preampStepIndicator.className = "preamp-step-indicator success";
 		}
 	} else {

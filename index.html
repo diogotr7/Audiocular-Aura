@@ -203,11 +203,11 @@
         <div class="card-header" style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
           <div>
             <h2 class="card-title" data-i18n="bands_title">EQ Bands Controller</h2>
-            <p class="card-subtitle" data-i18n="bands_subtitle">Adjust parametric values for each of the 10 DSP bands.</p>
+            <p id="bandsSubtitle" class="card-subtitle" data-i18n="bands_subtitle">Adjust parametric values for each of the 10 DSP bands.</p>
           </div>
           
           <!-- Global Tone Tilt Sub-panel -->
-          <div class="tilt-control-panel">
+          <div id="tiltControls" class="tilt-control-panel">
             <div class="tilt-header-row">
               <span class="tilt-panel-title">Global Tone Tilt</span>
               <span id="tiltTextValue" class="tilt-values-label">Bass: +0.0 dB, Treble: +0.0 dB</span>
@@ -309,7 +309,8 @@
       </div>
 
       <!-- Device Utility Controls Card -->
-      <section class="control-card utility-card-full">
+      <section id="ugreenControlsCard" class="control-card utility-card-full ugreen-card" hidden></section>
+      <section id="deviceUtilityCard" class="control-card utility-card-full">
         <div class="card-header">
           <h2 class="card-title" data-i18n="device_utilities_title">⚙️ Device Utility Controls</h2>
           <p class="card-subtitle" data-i18n="device_utilities_subtitle">Configure advanced hardware-level DAC parameters, amplifier states, and microphone gain.</p>

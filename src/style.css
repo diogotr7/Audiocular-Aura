@@ -490,6 +490,7 @@ body.aura-app-theme {
 /* --- Badges & Info text --- */
 .connection-group {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
 }
@@ -1551,6 +1552,12 @@ body.aura-app-theme {
   animation: fadeIn 0.2s ease;
 }
 
+/* Keep the same slot while idle so toggling sync cannot resize the dashboard. */
+.syncing-indicator.hidden {
+  display: inline-flex !important;
+  visibility: hidden;
+}
+
 .syncing-indicator .spinner-icon {
   display: inline-block;
   animation: spin 1s linear infinite;
@@ -2365,3 +2372,29 @@ kbd {
 
 
 
+
+/* Device capabilities hide unsupported controls even when their layout is flex/grid. */
+[hidden] { display: none !important; }
+/* Firmware-mapped UGREEN controls stay separate from the Savitech utilities. */
+.ugreen-card[hidden] { display: none !important; }
+.ugreen-card .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ug-badge { font-size: 12px; color: #fbbf24; border: 1px solid #fbbf2455; border-radius: 16px; padding: 4px 10px; }
+.ug-help { font-size: 13px; line-height: 1.6; color: var(--text-secondary, #a1a1aa); margin: 12px 0; }
+.ug-help.error { color: #fb7185; }
+.ug-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 16px 0; }
+.ug-field { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.ug-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; min-height: 44px; }
+.ugreen-card input[type=number], .ugreen-card select { width: 100%; padding: 9px; border: 1px solid #64748b55; border-radius: 6px; background: var(--bg-card, #161625); color: inherit; font: inherit; }
+.ugreen-card input:invalid { border-color: #fb7185; }
+.ugreen-card input[type=checkbox] { accent-color: #a78bfa; }
+.ugreen-card details { border-top: 1px solid #64748b44; padding: 16px 0; }
+.ugreen-card summary { cursor: pointer; font-weight: 600; }
+.ug-table-scroll { overflow-x: auto; margin-top: 16px; }
+.ug-mic-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 540px; }
+.ug-mic-table th, .ug-mic-table td { padding: 8px; text-align: left; }
+.ug-mic-table td:nth-child(3) { min-width: 125px; }
+.ug-mic-table input[type=number] { min-width: 85px; }
+.ug-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.ug-actions button, .ug-import { border: 1px solid #a78bfa66; background: #a78bfa18; color: inherit; border-radius: 8px; padding: 10px 14px; cursor: pointer; font: inherit; font-size: 13px; }
+.ug-actions button:disabled { opacity: .5; cursor: default; }
+.ug-import input { max-width: 180px; display: block; margin-top: 8px; font-size: 12px; }

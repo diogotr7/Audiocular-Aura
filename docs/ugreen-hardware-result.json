@@ -1,0 +1,76 @@
+{
+  "device": "12d1:0010",
+  "firmware": "1.0.1_210719_B1",
+  "date": "2026-10-13",
+  "physicalWebHidConnection": "Confirmed by the user; physical DSP and save tests used hidraw.",
+  "filters": [
+    {
+      "type": "PK",
+      "freq": 1000,
+      "raw": [
+        276416568,
+        3801053314,
+        221761460,
+        493913982,
+        4065224729
+      ],
+      "coefficientBits": 28,
+      "responseDb": [
+        0.0024494299914659245,
+        2.9999916284800814,
+        0.0018881512903182118
+      ],
+      "maxErrorDb": 0.001046135496522771,
+      "preampTargets": [
+        4012,
+        4012
+      ]
+    },
+    {
+      "type": "LSQ",
+      "freq": 100,
+      "raw": [
+        16804091,
+        4261698283,
+        16468312,
+        33269508,
+        4278472604
+      ],
+      "coefficientBits": 24,
+      "responseDb": [
+        2.9949386445026405,
+        1.5009332479520188,
+        -2.86524303886589e-09
+      ],
+      "maxErrorDb": 0.0010941801615720337,
+      "preampTargets": [
+        4012,
+        4012
+      ]
+    },
+    {
+      "type": "HSQ",
+      "freq": 4000,
+      "raw": [
+        22267866,
+        4265248778,
+        11272189,
+        20481163,
+        4287441812
+      ],
+      "coefficientBits": 24,
+      "responseDb": [
+        2.1052156689430436e-08,
+        1.4999352032539646,
+        2.9998712877932956
+      ],
+      "maxErrorDb": 6.893207784686162e-05,
+      "preampTargets": [
+        4012,
+        4012
+      ]
+    }
+  ],
+  "savedFlashVerified": true,
+  "originalConfigRestoredAndVerified": true
+}
